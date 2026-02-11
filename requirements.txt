@@ -1,0 +1,9 @@
+pyrogram
+tgcrypto
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+aiohttp
+aiofiles
+ujson
+psycopg2-binary

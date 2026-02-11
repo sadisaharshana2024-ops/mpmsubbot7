@@ -1,0 +1,10 @@
+token.pickle
+credentials.json
+bot_data.db
+file_search_bot.session
+file_search_bot.session-journal
+venv/
+__pycache__/
+downloads/
+*.log
+.env
