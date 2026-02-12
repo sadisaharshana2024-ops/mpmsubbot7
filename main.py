@@ -44,6 +44,11 @@ app = Client(
 )
 
 async def check_join(client: Client, user_id: int):
+    # Temporarily disabled as per user request
+    return True
+
+    # Original logic (commented out for reference)
+    """
     # Bypass check for Admins
     if user_id in ADMIN_IDS:
         return True
@@ -70,6 +75,7 @@ async def check_join(client: Client, user_id: int):
         logger.error("🛑 TIP: Make sure your Bot is an ADMINISTRATOR in your channel with 'Invite Users' permission.")
         return False # Strict mode: if we can't check, we block
     return False
+    """
 
 def is_admin(user):
     if not user:
