@@ -203,6 +203,7 @@ async def stats_command(client, message):
     total_users = db.get_user_count()
     monthly_users = db.get_monthly_user_count()
     total_chats, groups, channels = db.get_chat_stats()
+    total_searches = db.get_total_searches()
     
     # Deep Scan for accurate file count
     from config import FOLDER_ID
@@ -215,6 +216,7 @@ async def stats_command(client, message):
         f"📢 **Channels Added:** `{channels}`\n"
         f"👥 **Groups Added:** `{groups}`\n"
         f"🏢 **Total Chats:** `{total_chats}`\n\n"
+        f"🔍 **Total Searches:** `{total_searches}`\n"
         f"📂 **Indexed Files:** `{file_count}`\n"
     )
     
@@ -799,6 +801,9 @@ async def handle_message(client, message):
 async def perform_search(client, message, query, in_group=False, for_deletion=False, auto_search=False):
     """Reusable search logic for private chats and groups."""
     try:
+        # Increment total searches
+        db.increment_search_count()
+        
         files = drive_handler.search_files(query)
         if not files:
             if not auto_search:

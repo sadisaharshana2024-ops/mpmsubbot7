@@ -209,6 +209,21 @@ class Database:
         rows = self.execute_query('SELECT user_id FROM users', fetch_all=True)
         return [row[0] for row in rows] if rows else []
 
+    def increment_search_count(self):
+        if self.is_postgres:
+            query = "INSERT INTO settings (key, value) VALUES ('total_searches', '1') ON CONFLICT (key) DO UPDATE SET value = (settings.value::int + 1)::text"
+        else:
+            query = "INSERT OR REPLACE INTO settings (key, value) VALUES ('total_searches', COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key = 'total_searches'), 0) + 1)"
+        
+        self.execute_query(query, commit=True)
+
+    def get_total_searches(self):
+        res = self.get_setting('total_searches', '0')
+        try:
+            return int(res)
+        except:
+            return 0
+
     def get_user_count(self):
         res = self.execute_query('SELECT COUNT(*) FROM users', fetch_one=True)
         return res[0] if res else 0
