@@ -21,8 +21,8 @@ from pyrogram.types import (
     InputTextMessageContent
 )
 from pyrogram.enums import ChatMemberStatus
-from pyrogram.errors import UserNotParticipant
-from config import API_ID, API_HASH, BOT_TOKEN, ADMIN_USERNAMES, ADMIN_IDS, CHANNEL_USERNAME, CHANNEL_LINK, REQUEST_GROUP
+from pyrogram.errors import UserNotParticipant, FloodWait
+from config import API_ID, API_HASH, BOT_TOKEN, ADMIN_USERNAMES, ADMIN_IDS, CHANNEL_USERNAME, CHANNEL_LINK, REQUEST_GROUP, DB_NAME
 from gdrive_handler import drive_handler
 from database import db
 
@@ -101,6 +101,13 @@ def get_size_str(size_bytes):
             return f"{size_bytes/1024**3:.2f} GB"
     except Exception:
         return "Error"
+
+def get_progress_bar(current, total):
+    if total == 0: return "[░░░░░░░░░░] 0%"
+    percentage = (current / total) * 100
+    filled = int(percentage / 10)
+    bar = "█" * filled + "░" * (10 - filled)
+    return f"[{bar}] {percentage:.1f}%"
 
 async def safe_edit(message: Message, text, **kwargs):
     """Edit a message but ignore MESSAGE_NOT_MODIFIED errors."""
@@ -358,32 +365,101 @@ async def broadcast_now(client, message):
         await message.reply_text("❌ **Queue is empty!** Send some messages first.")
         return
 
+    # Deactivate mode immediately to prevent interference
+    admin_mode[user_id] = False
+    
+    # Database source detection
+    db_type = "PostgreSQL" if db.is_postgres else "SQLite"
+    if not db.is_postgres:
+        db_type += f" ({os.path.abspath(DB_NAME)})"
+
     users = db.get_all_users()
-    count = len(users)
+    chats = db.get_all_chats()
+    
+    # Combined list for broadcasting
+    targets = list(set(users + chats))
+    total = len(targets)
     queue = broadcast_queues[user_id]
     
-    status_msg = await message.reply_text(f"🚀 **Broadcasting {len(queue)} messages to {count} users...**")
+    status_msg = await message.reply_text(
+        f"🚀 **Broadcasting {len(queue)} messages to {total} targets...**\n"
+        f"📂 **DB Source:** `{db_type}`"
+    )
     
     success = 0
     failed = 0
+    errors = {} # {error_name: count}
     
-    for u_id in users:
-        try:
-            for msg in queue:
-                await msg.copy(u_id)
-                await asyncio.sleep(0.05) # Prevent flood
-            success += 1
-        except Exception:
-            failed += 1
-            
-    # Exit broadcast mode and clear queue
-    admin_mode[user_id] = False
+    # Semaphore to limit concurrency (Telegram rate limits)
+    semaphore = asyncio.Semaphore(10) # 10 parallel sends
+    
+    async def send_to_target(tgt_id):
+        nonlocal success, failed
+        async with semaphore:
+            try:
+                for m in queue:
+                    try:
+                        await m.copy(tgt_id)
+                    except FloodWait as e:
+                        await asyncio.sleep(e.value)
+                        await m.copy(tgt_id)
+                    except Exception as e:
+                        raise e
+                    await asyncio.sleep(0.1) # Small delay per message in queue
+                success += 1
+            except Exception as e:
+                err_name = type(e).__name__
+                if "PEER_ID_INVALID" in str(e): err_name = "Bot Blocked"
+                elif "USER_DEACTIVATED" in str(e): err_name = "Deleted Account"
+                
+                errors[err_name] = errors.get(err_name, 0) + 1
+                logger.error(f"Broadcast error for {tgt_id}: {e}")
+                failed += 1
+
+    last_update_time = asyncio.get_event_loop().time()
+    
+    # Process targets
+    tasks = []
+    for i, target_id in enumerate(targets):
+        tasks.append(asyncio.create_task(send_to_target(target_id)))
+        
+        # Check progress and update status message periodically
+        if (i + 1) % 5 == 0 or (i + 1 == total):
+            current_time = asyncio.get_event_loop().time()
+            if (current_time - last_update_time > 5) or (i + 1 == total):
+                completed = success + failed
+                progress = get_progress_bar(completed, total)
+                status_text = (
+                    f"🚀 **Powerful Broadcast in Progress...**\n\n"
+                    f"📊 **Progress:** {progress}\n"
+                    f"✨ **Successful:** `{success}`\n"
+                    f"❌ **Failed:** `{failed}`\n"
+                    f"🎯 **Total Targets:** `{total}`\n"
+                    f"📂 **DB:** `{db_type}`"
+                )
+                await safe_edit(status_msg, status_text)
+                last_update_time = current_time
+
+    # Wait for all tasks to complete
+    await asyncio.gather(*tasks)
+    
+    # Final cleanup
     broadcast_queues[user_id] = []
     
+    # Format error report
+    err_report = ""
+    if errors:
+        err_report = "\n\n⚠️ **Failure Reasons:**\n"
+        for err, count in errors.items():
+            err_report += f"• `{err}`: {count}\n"
+
     await status_msg.edit(
         f"✅ **Broadcast Completed!**\n\n"
-        f"✨ **Successful Users:** `{success}`\n"
-        f"❌ **Failed Users:** `{failed}`\n\n"
+        f"✨ **Successful:** `{success}`\n"
+        f"❌ **Failed:** `{failed}`\n"
+        f"👥 **Total Targets:** `{total}`\n"
+        f"📂 **Database Source:** `{db_type}`"
+        f"{err_report}\n"
         "Broadcast mode deactivated and queue cleared."
     )
 
